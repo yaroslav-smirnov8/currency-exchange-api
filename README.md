@@ -1,234 +1,142 @@
-# Currency Exchange API
+# Currency Exchange Integration Service
 
-Async aiohttp REST API for real-time currency exchange rates and currency conversion.
+## 🚀 Overview
+Currency Exchange Integration Service is an asynchronous REST API that gives product teams a stable, internal-facing contract for foreign exchange data. Instead of pushing provider-specific logic into every frontend, widget, checkout flow, or automation job, it centralizes validation, provider access, error handling, and environment-based configuration behind one lightweight service.
 
-Designed as a small production-style service:
+## 🎯 Problem
+Teams that need currency conversion usually end up coupling directly to third-party FX APIs. That creates repeated work across products:
 
-- **Async I/O-first** (external provider calls are I/O-bound)
-- **Clear module boundaries**: routes → service → provider
-- **Pluggable providers** (real provider + mock provider for local dev/tests)
-- **Consistent JSON contract** for both success and errors
-- **Strict input validation** (currency codes, amount parsing)
+- every client has to manage provider keys, payload formats, and failure modes
+- validation logic gets duplicated across UIs, backend jobs, and partner integrations
+- browser-based use cases need safe cross-origin access without exposing provider complexity
+- swapping providers or adding a mock environment becomes operationally expensive
 
----
+For startups and platform teams, this turns a simple business requirement into recurring integration overhead.
 
-## Why this project
+## 💡 Solution
+This system exposes a clean HTTP layer for currency conversion and latest-rate lookups while isolating upstream provider logic behind a pluggable interface. It validates inputs at the API boundary, normalizes success and error responses into a predictable JSON contract, and supports both a live external provider and a deterministic mock mode for local development, testing, and demos.
 
-Many client apps (frontend widgets, partner integrations, internal tools) need currency conversion, but should not embed provider-specific details (API keys, response formats, error cases). This API provides a stable contract and hides provider complexity behind an adapter.
+## ⚙️ Features
+- Stateless FX API designed for use by frontend apps, internal services, and partner-facing widgets
+- Asynchronous request handling with shared outbound HTTP session management
+- Pluggable provider architecture with runtime provider selection via environment settings
+- Deterministic mock provider for offline development and repeatable automated tests
+- Centralized validation for ISO-style currency codes and numeric amount parsing
+- Consistent JSON response envelopes for both successful requests and upstream failures
+- CORS middleware for browser-based integrations and embeddable widgets
+- Service-layer filtering of requested symbols to reduce client-side post-processing
+- Clean separation of routing, business logic, provider adapters, and configuration
+- Horizontal-scale-friendly design with no local persistence or instance affinity
 
----
+## 🧠 Architecture
+The service is organized as a small but production-minded integration boundary:
 
-## Features
+- `main.py` starts the API and delegates application assembly to the app factory.
+- `app/app_factory.py` loads environment settings, registers middleware, creates a shared `aiohttp.ClientSession`, and injects the selected provider into the service layer.
+- `app/api/routes.py` handles HTTP routing, validates request parameters, and keeps malformed traffic from leaking into core logic.
+- `app/services/exchange_service.py` owns the business contract: conversion output, rate lookup, and symbol filtering.
+- `app/providers/` contains the provider interface and adapters, allowing the live data source to be replaced without changing the API contract.
+- `app/api/middlewares.py` standardizes cross-cutting behavior such as JSON error responses and CORS headers.
 
-- Real-time conversion and latest rates
-- Provider abstraction (Protocol-based) with a deterministic **mock** provider
-- CORS middleware for browser/widget usage (wildcard or allowlist)
-- Timeout handling for external API calls
-- Deterministic error model with correct HTTP status codes
-- Unit + integration tests
+Key technical decisions:
 
----
+- A provider protocol decouples the system from any single exchange-rate vendor.
+- The API is intentionally stateless, which simplifies deployment behind a load balancer and avoids stale-data persistence concerns.
+- A shared async HTTP client is created on startup and cleaned up on shutdown to avoid per-request connection overhead.
+- Mock mode is treated as a first-class runtime path, improving delivery speed for tests, demos, and local work.
 
-## Architecture (high level)
-
-**Request flow**
-
-1. **Routes** validate and normalize input (ISO-4217 currency code format, amount parsing)
-2. **Service layer** executes business logic (conversion, symbols filtering)
-3. **Provider layer** fetches upstream rates (real provider) or returns deterministic test data (mock)
-4. **Middleware** enforces a consistent JSON error schema and handles CORS
-
-**Lifecycle**
-
-The app creates a single `aiohttp.ClientSession` on startup and closes it on cleanup.
-
----
-
-## API contract
-
-### Response envelopes
-
-- Success: `{"data": ...}`
-- Error: `{"error": {"code": ..., "message": ..., "details": ...}}`
-
-This contract is implemented in `app/errors.py` and applied uniformly via middleware.
-
----
-
-## Endpoints + examples
-
-### Health
-
-```http
-GET /healthz
+```mermaid
+flowchart TD
+    A[Client App / Automation / Widget] --> B[HTTP API]
+    B --> C[Route Validation]
+    C --> D[Exchange Service]
+    D --> E{Configured Provider}
+    E --> F[ExchangeRate-API Adapter]
+    E --> G[Mock Provider]
+    F --> H[External FX API]
+    G --> I[In-Memory Rates]
+    H --> J[Normalized Result]
+    I --> J
+    J --> K[Error + CORS Middleware]
+    K --> L[Stable JSON Response]
 ```
 
-```json
-{
-  "data": {
-    "status": "ok"
-  }
-}
+## 🔧 Tech Stack
+- Python 3.11/3.12
+- `aiohttp`
+- `python-dotenv`
+- `pytest`
+- `pytest-asyncio`
+- `pytest-aiohttp`
+- ExchangeRate-API
+
+## 🧪 Example Usage
+Run the service locally:
+
+```bash
+python3 main.py
 ```
 
-### Convert
+Convert an amount:
 
-```http
-GET /v1/convert?base=USD&quote=EUR&amount=10
+```bash
+curl "http://localhost:8080/v1/convert?base=USD&quote=EUR&amount=100"
 ```
+
+Fetch filtered rates:
+
+```bash
+curl "http://localhost:8080/v1/rates/USD?symbols=EUR,GBP"
+```
+
+Example response:
 
 ```json
 {
   "data": {
     "base": "USD",
     "quote": "EUR",
-    "amount": 10.0,
+    "amount": 100.0,
     "rate": 0.92,
-    "result": 9.2,
+    "result": 92.0,
     "provider": "exchangerate_api"
   }
 }
 ```
 
-> Note: `rate` and `result` depend on the selected provider and current market data; the schema is stable.
+## 🎯 Why This Matters
+For startups:
+This service removes duplicated integration work across pricing, checkout, reporting, and partner-facing products. It gives small teams a reusable FX layer without forcing each product squad to become experts in provider behavior and operational edge cases.
 
-### Latest rates
+For AI systems:
+AI agents and workflow-driven systems perform better when external dependencies are wrapped in predictable, machine-consumable contracts. This API gives them normalized inputs, validated parameters, and deterministic failure modes that are far easier to orchestrate safely than raw third-party APIs.
 
-```http
-GET /v1/rates/USD?symbols=EUR,GBP
-```
+For automation:
+Currency conversion often sits inside invoicing flows, quote generation, analytics pipelines, and cross-border operations. A stateless HTTP service with a clean contract is easier to compose into automations, easier to test, and easier to evolve than vendor logic embedded across multiple jobs and apps.
 
-Example response shape:
+## 📈 Possible Extensions
+- Add caching and TTL-based refresh policies to reduce latency and provider cost
+- Support provider failover or multi-provider aggregation for higher availability
+- Introduce authentication, quotas, and audit logging for multi-tenant usage
+- Add batch conversion and historical-rate endpoints for reporting workloads
+- Ship container-first deployment assets and observability hooks for production operations
+- Add structured metrics and tracing for upstream latency, error rates, and usage patterns
 
-```json
-{
-  "data": {
-    "base": "USD",
-    "rates": {
-      "EUR": 0.92,
-      "GBP": 0.79
-    },
-    "provider": "exchangerate_api"
-  }
-}
-```
+## API Surface
+- `GET /healthz` returns a simple health signal for service monitoring
+- `GET /v1/convert?base=USD&quote=EUR&amount=10` converts one currency into another
+- `GET /v1/rates/{base}?symbols=EUR,GBP` returns the latest rates for a base currency, optionally filtered to selected symbols
 
-### Validation error example
+## Configuration
+- `API_PROVIDER`: `exchangerate_api` or `mock`
+- `EXCHANGERATE_API_KEY`: required for the live provider
+- `EXCHANGERATE_BASE_URL`: upstream provider base URL
+- `HTTP_TIMEOUT_SECONDS`: outbound provider timeout
+- `CORS_ENABLED`: enables or disables CORS middleware
+- `CORS_ALLOWED_ORIGINS`: `*` or a comma-separated allowlist of trusted origins
 
-```http
-GET /v1/convert?base=USDT&quote=EUR&amount=10
-```
-
-```json
-{
-  "error": {
-    "code": "validation_error",
-    "message": "Invalid currency code format.",
-    "details": {
-      "field": "base",
-      "expected": "ISO-4217"
-    }
-  }
-}
-```
-
-### Provider error example (timeout/upstream failure)
-
-```json
-{
-  "error": {
-    "code": "provider_error",
-    "message": "External provider request failed or timed out."
-  }
-}
-```
-
----
-
-## Repository structure (actual)
-
-```text
-.
-├── app/
-│   ├── api/
-│   │   ├── middlewares.py
-│   │   └── routes.py
-│   ├── providers/
-│   │   ├── base.py
-│   │   ├── exchangerate_api.py
-│   │   └── mock.py
-│   ├── services/
-│   │   └── exchange_service.py
-│   ├── app_factory.py
-│   ├── errors.py
-│   └── settings.py
-├── tests/
-├── main.py
-├── requirements.txt
-└── RUN_INSTRUCTIONS.md
-```
-
----
-
-## Run locally
-
-See `RUN_INSTRUCTIONS.md` for step-by-step commands.
-
-Quick start (PowerShell):
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-python main.py
-```
-
-Default address: `http://localhost:8080`
-
----
-
-## Environment variables
-
-| Variable | Required | Default | Description |
-|---|---:|---|---|
-| API_PROVIDER | Yes | exchangerate_api | Provider: `exchangerate_api` or `mock` |
-| EXCHANGERATE_API_KEY | Only for `exchangerate_api` | | API key for ExchangeRate-API |
-| EXCHANGERATE_BASE_URL | No | https://v6.exchangerate-api.com/v6 | Provider base URL |
-| HTTP_TIMEOUT_SECONDS | No | 8.0 | Provider HTTP timeout |
-| CORS_ENABLED | No | true | Enable CORS middleware |
-| CORS_ALLOWED_ORIGINS | No | * | Comma-separated origins or `*` |
-
-Operational notes:
-
-- Use `API_PROVIDER=mock` for local runs/tests without external dependencies.
-- In production, prefer a strict allowlist in `CORS_ALLOWED_ORIGINS`.
-
----
-
-## Testing
-
-```powershell
-pytest -q
-```
-
-Test suite covers:
-
-- Route-level validation
-- Service-layer conversion logic
-- Provider integration behavior
-- HTTP integration tests for endpoints
-
----
-
-## Non-goals / constraints
-
-- No DB/persistence (provider is the source of truth)
-- No caching layer included by default (can be added if rate limits become a concern)
-- No automatic provider failover (provider choice is explicit via `API_PROVIDER`)
-
----
-
-## License
-
-MIT License
+## Quality Signals
+- Route validation, service behavior, provider parsing, and API integration paths are covered by tests
+- Errors are normalized into explicit JSON payloads instead of leaking raw exceptions
+- The codebase has clear boundaries between API, services, providers, and configuration
+- The system can run against a mock provider without external dependencies, which improves reliability in CI and local development
